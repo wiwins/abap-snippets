@@ -1,0 +1,402 @@
+*&----------------------------------------------------------------------------*
+*& IMPLEMENTASI ERP XXXX                                                      *
+*&----------------------------------------------------------------------------*
+*& Title       : ALV Template SALV/LVC                                        *
+*& Funspec     :                                                              *
+*& Module      : XX                                                           *
+*& Functional  : Wiwin R                                                      *
+*& Abaper      : Wiwin S                                                      *
+*& Date        : 20.11.2015                                                   *
+*& Version     : 01.00.00                                                     *
+*&----------------------------------------------------------------------------*
+*& REVISION LOG                                                               *
+*&                                                                            *
+*& VER#     DATE        AUTHOR            DESCRIPTION                         *
+*& ----     ----        ------            -----------                         *
+*&----------------------------------------------------------------------------*
+
+REPORT zex_alv_grid_lvc.
+TABLES: t001.
+
+TYPES: BEGIN OF ty_report.
+        INCLUDE STRUCTURE t001.
+TYPES:   selec   TYPE c,
+         excep   TYPE c,
+         message TYPE bapiret2-message,
+         END OF ty_report.
+
+DATA: t_report TYPE TABLE OF ty_report.
+DATA: wa_report TYPE ty_report.
+FIELD-SYMBOLS: <fs_report> TYPE ty_report.
+
+DATA: r_alv TYPE REF TO cl_salv_table.
+
+*----------------------------------------------------------------------*
+*       CLASS lcl_handler DEFINITION
+*----------------------------------------------------------------------*
+CLASS lcl_handler DEFINITION FINAL.
+  PUBLIC SECTION.
+    METHODS:
+      on_user_command FOR EVENT added_function OF cl_salv_events_table
+        IMPORTING e_salv_function,
+      on_double_click FOR EVENT double_click OF   cl_salv_events_table
+        IMPORTING row column.
+ENDCLASS.                    "lcl_handler_std DEFINITION
+
+*----------------------------------------------------------------------*
+*       CLASS lcl_handler IMPLEMENTATION
+*----------------------------------------------------------------------*
+CLASS lcl_handler IMPLEMENTATION.
+  METHOD  on_user_command.
+    PERFORM f_user_command USING e_salv_function.
+  ENDMETHOD.                    "on_user_command
+
+  METHOD on_double_click.
+    PERFORM f_double_click USING 0 row column.
+  ENDMETHOD.                    "on_double_click
+ENDCLASS.                    "lcl_handler IMPLEMENTATION
+
+SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME TITLE text-s01.
+SELECT-OPTIONS: s_bukrs FOR t001-bukrs.
+SELECTION-SCREEN END OF BLOCK b1.
+
+START-OF-SELECTION.
+  PERFORM f_get_data.
+  PERFORM f_display_data.
+
+*&---------------------------------------------------------------------*
+*&      Form  F_GET_DATA
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM f_get_data .
+  SELECT * FROM t001
+    INTO TABLE t_report
+    WHERE bukrs IN s_bukrs.
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*&      Form  F_DISPLAY_DATA
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM f_display_data .
+  DATA: lr_selections TYPE REF TO cl_salv_selections,
+        lr_events     TYPE REF TO cl_salv_events_table,
+        lr_layout     TYPE REF TO cl_salv_layout,
+        lr_handler    TYPE REF TO lcl_handler,
+        lr_form       TYPE REF TO cl_salv_form_layout_grid,
+        lr_functions  TYPE REF TO cl_salv_functions_list,
+        lr_settings   TYPE REF TO cl_salv_display_settings,
+        ls_key        TYPE salv_s_layout_key.
+
+  TRY.
+      CALL METHOD cl_salv_table=>factory
+        EXPORTING
+          list_display = if_salv_c_bool_sap=>false
+        IMPORTING
+          r_salv_table = r_alv
+        CHANGING
+          t_table      = t_report[].
+
+    CATCH cx_salv_msg INTO DATA(lr_exc).
+      MESSAGE e000(0k) WITH lr_exc->get_text( ).
+  ENDTRY.
+
+  " set pf-status
+*  CALL METHOD r_alv->set_screen_status
+*    EXPORTING
+*      report        = sy-repid
+*      pfstatus      = 'STATUS01'
+*      set_functions = cl_salv_table=>c_functions_all.
+  r_alv->get_functions( )->set_all( ).
+
+  " set selections mode
+  lr_selections = r_alv->get_selections( ).
+  lr_selections->set_selection_mode( if_salv_c_selection_mode=>row_column ).
+
+  " set event handler
+*  CREATE OBJECT lr_handler.
+*  lr_events = r_alv->get_event( ).
+*  SET HANDLER lr_handler->on_user_command FOR lr_events.
+*  SET HANDLER lr_handler->on_double_click FOR lr_events.
+
+  " set layout
+  ls_key-report = sy-repid.
+  lr_layout = r_alv->get_layout( ).
+  lr_layout->set_key( ls_key ).
+  lr_layout->set_save_restriction( if_salv_c_layout=>restrict_none ).
+  lr_layout->set_default( abap_true ).
+
+  PERFORM f_set_columns.
+
+*  r_alv->display( ).
+*  EXIT.
+
+  " or display using ALV LVC (for edit mode)
+  DATA: lt_fieldcat   TYPE lvc_t_fcat,
+        ls_layout     TYPE lvc_s_layo,
+        ls_disvariant TYPE disvariant.
+
+  FIELD-SYMBOLS: <fieldcat> TYPE lvc_s_fcat.
+
+  CALL METHOD cl_salv_controller_metadata=>get_lvc_fieldcatalog
+    EXPORTING
+      r_columns      = r_alv->get_columns( )
+      r_aggregations = r_alv->get_aggregations( )
+    RECEIVING
+      t_fieldcatalog = lt_fieldcat.
+
+  PERFORM f_set_columns_lvc TABLES lt_fieldcat.
+
+  ls_layout-box_fname  = 'SELEC'.
+  ls_layout-excp_fname = 'EXCEP'.
+*  ls_layout-stylefname = 'STYLE'.
+
+  ls_disvariant-report =  sy-repid.
+  ls_disvariant-handle = 'POST'.
+
+  CALL FUNCTION 'REUSE_ALV_GRID_DISPLAY_LVC'
+    EXPORTING
+      i_callback_program      = sy-repid
+*     i_callback_pf_status_set = 'F_SET_PFSTATUS_LVC'
+      i_callback_user_command = 'F_USER_COMMAND_LVC'
+      is_layout_lvc           = ls_layout
+      it_fieldcat_lvc         = lt_fieldcat
+      i_default               = 'X'
+      i_save                  = 'A'
+      is_variant              = ls_disvariant
+    TABLES
+      t_outtab                = t_report[]
+    EXCEPTIONS
+      program_error           = 1
+      OTHERS                  = 2.
+
+  IF sy-subrc NE 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+      WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*&      Form  F_USER_COMMAND
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM f_user_command  USING im_fcode.
+  CASE im_fcode.
+    WHEN 'ZPRO'.
+      PERFORM f_process_records.
+    WHEN OTHERS.
+  ENDCASE.
+ENDFORM.                    " F_USER_COMMAND
+
+*&---------------------------------------------------------------------*
+*&      Form  F_DOUBLE_CLICK
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM f_double_click  USING    im_level im_row im_column.
+  READ TABLE t_report ASSIGNING <fs_report> INDEX im_row.
+  CHECK sy-subrc EQ 0.
+
+  CASE im_column.
+    WHEN 'EBELN'.
+    WHEN OTHERS.
+  ENDCASE.
+
+ENDFORM.                    " F_DOUBLE_CLICK
+
+*&---------------------------------------------------------------------*
+*&      Form  F_PROCESS_RECORDS
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM f_process_records .
+  DATA: lt_rows  TYPE salv_t_row,
+        lt_rows2 TYPE salv_t_row,
+        lv_row   TYPE LINE OF salv_t_row.
+
+  DATA: lr_selections TYPE REF TO cl_salv_selections.
+
+  " get data selections
+  TRY .
+      lr_selections = r_alv->get_selections( ).
+      lt_rows = lr_selections->get_selected_rows( ).
+    CATCH cx_salv_not_found.                            "#EC NO_HANDLER
+  ENDTRY.
+  IF lt_rows IS INITIAL.
+    MESSAGE e000(0k) WITH 'No data selected'.
+  ENDIF.
+
+  LOOP AT lt_rows INTO lv_row.
+    " read record to print
+    READ TABLE t_report ASSIGNING <fs_report> INDEX lv_row.
+    CHECK sy-subrc EQ 0.
+
+    " process here
+
+  ENDLOOP.
+
+  r_alv->refresh( ).
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*&      Form  F_SET_PFSTATUS_LVC
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM f_set_pfstatus_lvc USING rt_extab TYPE slis_t_extab.
+  DATA: lv_pfkey TYPE char50.
+
+*  " set custom pf-status
+*  lv_pfkey = 'STATUS07'.
+*  SET PF-STATUS lv_pfkey EXCLUDING rt_extab.
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*&      Form  F_USER_COMMAND_LVC
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM f_user_command_lvc USING fu_ucomm LIKE sy-ucomm
+                                  fs_selfield TYPE slis_selfield.
+
+  DATA: ref_grid TYPE REF TO cl_gui_alv_grid.
+
+  " check modified data
+  IF ref_grid IS INITIAL.
+    CALL FUNCTION 'GET_GLOBALS_FROM_SLVC_FULLSCR'
+      IMPORTING
+        e_grid = ref_grid.
+  ENDIF.
+
+  IF NOT ref_grid IS INITIAL.
+    CALL METHOD ref_grid->check_changed_data.
+  ENDIF.
+
+  " user command action
+*  CASE fu_ucomm.
+*    WHEN 'ZPOST'.
+*      PERFORM f_posting_post.
+*    WHEN 'ZLOGS'.
+*      CALL FUNCTION 'FINB_BAPIRET2_DISPLAY'
+*        EXPORTING
+*          it_message = t_message.
+*    WHEN '&IC1'. " double click
+*      " read record to process
+*      READ TABLE t_report ASSIGNING <fs_report> INDEX fs_selfield-tabindex.
+*      CHECK sy-subrc EQ 0.
+*      CASE fs_selfield-fieldname.
+*        WHEN 'TRANS'.
+*          SET PARAMETER ID 'BUK' FIELD <fs_report>-bukrs.
+*          CALL TRANSACTION 'XXX' AND SKIP FIRST SCREEN.
+*      ENDCASE.
+*
+*    WHEN OTHERS.
+*  ENDCASE.
+
+  fs_selfield-refresh = 'X'.
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*&      Form  F_SET_COLUMNS
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM f_set_columns .
+  DATA: lr_columns TYPE REF TO cl_salv_columns_table,
+        lr_column  TYPE REF TO cl_salv_column_table.
+
+  DATA: ls_col TYPE lvc_s_colo.
+
+  lr_columns = r_alv->get_columns( ).
+  lr_columns->set_optimize( ).
+*  lr_columns->set_exception_column( 'EXCEP' ).
+
+  DEFINE set_technical.
+    try .
+        lr_column ?= lr_columns->get_column( &1 ).
+        lr_column->set_technical( ).
+      catch cx_salv_not_found.                          "#EC NO_HANDLER
+    endtry.
+  END-OF-DEFINITION.
+
+  set_technical: 'MANDT'.
+
+  DEFINE set_text.
+    try .
+        lr_column ?= lr_columns->get_column( &1 ).
+        if &2 ne space.
+          lr_column->set_short_text( &2 ).
+        endif.
+        if &3 ne space.
+          lr_column->set_medium_text( &3 ).
+        endif.
+        if &4 ne space.
+          lr_column->set_long_text( &4 ).
+        endif.
+      catch cx_salv_not_found.                          "#EC NO_HANDLER
+    endtry.
+  END-OF-DEFINITION.
+
+*  set_text: 'BWKEY' 'Plant' 'Plant' 'Plant'.
+
+  DEFINE set_currency.
+    try .
+        lr_column ?= lr_columns->get_column( &1 ).
+        IF &2 is NOT INITIAL.
+          lr_column->set_currency_column( &2 ).
+        ENDIF.
+        IF &3 is NOT INITIAL.
+          lr_column->set_currency( &3 ).
+        ENDIF.
+      catch cx_salv_not_found.                          "#EC NO_HANDLER
+    endtry.
+  END-OF-DEFINITION.
+
+*  set_currency: 'ZPLPR' '' 'IDR'.
+
+  DEFINE set_icon.
+    try .
+        lr_column ?= lr_columns->get_column( &1 ).
+        lr_column->set_icon( ).
+        lr_column->set_key( ).
+      catch cx_salv_not_found.                          "#EC NO_HANDLER
+    endtry.
+  END-OF-DEFINITION.
+
+*  set_icon: 'TYICO', 'STICO'.
+
+  DEFINE set_color.
+    TRY .
+        lr_column ?= lr_columns->get_column( &1 ).
+        lr_column->set_color( ls_col ).
+      CATCH cx_salv_not_found.                          "#EC NO_HANDLER
+    ENDTRY.
+  END-OF-DEFINITION.
+
+*  ls_col-col = 5.
+*  ls_col-int = 0.
+*  set_color: 'WAER2', 'PRACC_CC', 'INACC_CC', 'TOTPR_CC'.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*&      Form  F_SET_COLUMNS_LVC
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM f_set_columns_lvc TABLES ft_fieldcat TYPE lvc_t_fcat.
+  FIELD-SYMBOLS: <fieldcat> TYPE lvc_s_fcat.
+
+  " set editable
+  LOOP AT ft_fieldcat ASSIGNING <fieldcat>.
+    CASE <fieldcat>-fieldname.
+      WHEN 'STCEG'.
+        <fieldcat>-edit = 'X'.
+      WHEN OTHERS.
+    ENDCASE.
+  ENDLOOP.
+ENDFORM.
